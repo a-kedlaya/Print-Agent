@@ -86,6 +86,55 @@ type Job struct {
 	PrinterID string    `json:"printer_id"`
 	CreatedAt time.Time `json:"created_at"`
 	Slip      Slip      `json:"slip"`
+	// Bill is set instead of Slip when this job is the customer bill.
+	// Exactly one of Slip or Bill is populated; the other is zero.
+	// A Slip is a kitchen order ticket (no prices); a Bill carries prices
+	// and totals for the customer. Both are routed to their printer_id.
+	Bill *Bill `json:"bill,omitempty"`
+}
+
+// Bill is the customer-facing bill: every station's items for one order
+// combined, with prices and totals. It is separate from Slip, which is a
+// kitchen order ticket and carries no prices by design (DPDP Act 2023).
+// Money is in paise (minor units) everywhere, so totals never drift through
+// floating point. TaxRate is in basis points (500 = 5.00%).
+type Bill struct {
+	Title         string     `json:"title,omitempty"`      // "CUSTOMER BILL"; defaults to that
+	Restaurant    string     `json:"restaurant,omitempty"` // printed header
+	BillNumber    string     `json:"bill_number,omitempty"`
+	Table         string     `json:"table,omitempty"`
+	OrderNumber   string     `json:"order_number,omitempty"`
+	Server        string     `json:"server,omitempty"`
+	Guests        int        `json:"guests,omitempty"`
+	PlacedAt      time.Time  `json:"placed_at"`
+	Items         []BillItem `json:"items"`
+	Subtotal      int        `json:"subtotal"`                 // paise
+	TaxRate       int        `json:"tax_rate,omitempty"`       // basis points (500 = 5.00%)
+	Tax           int        `json:"tax,omitempty"`            // paise
+	ServiceCharge int        `json:"service_charge,omitempty"` // paise
+	Discount      int        `json:"discount,omitempty"`       // paise
+	Total         int        `json:"total"`                    // paise
+	Payments      []Payment  `json:"payments,omitempty"`
+	Change        int        `json:"change,omitempty"`   // paise
+	Currency      string     `json:"currency,omitempty"` // amount prefix, e.g. "Rs "
+	Footer        string     `json:"footer,omitempty"`   // e.g. a GSTIN line
+	Duplicate     bool       `json:"duplicate,omitempty"`
+	MovedFrom     string     `json:"moved_from,omitempty"`
+}
+
+// BillItem is one line on the bill, with its price.
+type BillItem struct {
+	Quantity  int    `json:"quantity"`
+	Name      string `json:"name"`
+	Notes     string `json:"notes,omitempty"`
+	UnitPrice int    `json:"unit_price"` // paise
+	Amount    int    `json:"amount"`     // paise (Quantity * UnitPrice)
+}
+
+// Payment is one tendered amount on the bill.
+type Payment struct {
+	Method string `json:"method"` // "Cash", "Card"
+	Amount int    `json:"amount"` // paise
 }
 
 type Slip struct {

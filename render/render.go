@@ -76,24 +76,7 @@ func Render(slip job.Slip, width job.Width) ([]byte, error) {
 	b.Write(cmdCodePage)
 
 	// Banners first, so nobody misses them.
-	if slip.Duplicate {
-		r.banner("DUPLICATE")
-		if slip.DuplicateReason != "" {
-			b.Write(cmdAlignCentre)
-			r.block(slip.DuplicateReason, cols, 0, "", "", style{centre: true})
-		}
-	}
-	if slip.MovedFrom != "" {
-		r.banner("MOVED FROM " + strings.ToUpper(slip.MovedFrom))
-		b.Write(cmdAlignCentre)
-		r.text("check for duplicate")
-	}
-	if slip.FallbackFrom != "" {
-		r.banner("BACKUP FOR " + strings.ToUpper(slip.FallbackFrom))
-	}
-	if slip.Delayed {
-		r.banner("DELAYED")
-	}
+	r.banners(slip.Duplicate, slip.DuplicateReason, slip.MovedFrom, slip.FallbackFrom, slip.Delayed)
 
 	// Station, large and centred. Double width halves the line length.
 	b.Write(cmdAlignCentre)
@@ -196,6 +179,37 @@ func (r *renderer) banner(text string) {
 	}
 	b.Write(cmdReverseOff)
 	b.Write(cmdBoldOff)
+}
+
+// banners draws the DUPLICATE / MOVED FROM / BACKUP FOR / DELAYED banners a
+// reprinted or moved ticket carries, in the order the kitchen expects them.
+// Both the kitchen ticket and the customer bill use it, so a bill reprinted
+// after a crash or moved to a backup is marked the same way a KOT is.
+func (r *renderer) banners(dup bool, dupReason, movedFrom, fallbackFrom string, delayed bool) {
+	b := &r.b
+	if dup {
+		r.banner("DUPLICATE")
+		if dupReason != "" {
+			b.Write(cmdAlignCentre)
+			r.block(dupReason, r.cols, 0, "", "", style{centre: true})
+		}
+	}
+	if movedFrom != "" {
+		r.banner("MOVED FROM " + strings.ToUpper(movedFrom))
+		b.Write(cmdAlignCentre)
+		r.text("check for duplicate")
+	}
+	if fallbackFrom != "" {
+		r.banner("BACKUP FOR " + strings.ToUpper(fallbackFrom))
+	}
+	if delayed {
+		r.banner("DELAYED")
+	}
+}
+
+// rule writes a full-width line of dashes.
+func (r *renderer) rule() {
+	r.text(strings.Repeat("-", r.cols))
 }
 
 // spread puts left and right on one line, or on two if they don't fit.

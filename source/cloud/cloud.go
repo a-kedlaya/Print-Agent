@@ -270,7 +270,16 @@ var (
 		"station": nil, "table": nil, "order_number": nil, "placed_at": nil, "notes": nil,
 		"duplicate": nil, "moved_from": nil, "items": itemShape, "extras": extraShape,
 	}
-	jobShape = shape{"id": nil, "printer_id": nil, "created_at": nil, "slip": slipShape}
+	billItemShape = shape{"quantity": nil, "name": nil, "notes": nil, "unit_price": nil, "amount": nil}
+	paymentShape  = shape{"method": nil, "amount": nil}
+	billShape     = shape{
+		"title": nil, "restaurant": nil, "bill_number": nil, "table": nil, "order_number": nil,
+		"server": nil, "guests": nil, "placed_at": nil, "items": billItemShape, "payments": paymentShape,
+		"subtotal": nil, "tax_rate": nil, "tax": nil, "service_charge": nil, "discount": nil,
+		"total": nil, "change": nil, "currency": nil, "footer": nil,
+		"duplicate": nil, "moved_from": nil,
+	}
+	jobShape = shape{"id": nil, "printer_id": nil, "created_at": nil, "slip": slipShape, "bill": billShape}
 )
 
 // inspect walks a JSON value. It returns the paths of fields not in known
@@ -402,7 +411,48 @@ func toJob(a api.Job) job.Job {
 			Duplicate:   a.Slip.Duplicate,
 			MovedFrom:   a.Slip.MovedFrom,
 		},
+		Bill: toBill(a.Bill),
 	}
+}
+
+// toBill copies a wire bill into the paper-track model. A nil bill stays nil
+// (the job is a kitchen ticket). The agent caps nothing here: a bill is one
+// document, and the server is trusted with its size.
+func toBill(a *api.Bill) *job.Bill {
+	if a == nil {
+		return nil
+	}
+	b := &job.Bill{
+		Title:         a.Title,
+		Restaurant:    a.Restaurant,
+		BillNumber:    a.BillNumber,
+		Table:         a.Table,
+		OrderNumber:   a.OrderNumber,
+		Server:        a.Server,
+		Guests:        a.Guests,
+		PlacedAt:      a.PlacedAt,
+		Subtotal:      a.Subtotal,
+		TaxRate:       a.TaxRate,
+		Tax:           a.Tax,
+		ServiceCharge: a.ServiceCharge,
+		Discount:      a.Discount,
+		Total:         a.Total,
+		Change:        a.Change,
+		Currency:      a.Currency,
+		Footer:        a.Footer,
+		Duplicate:     a.Duplicate,
+		MovedFrom:     a.MovedFrom,
+	}
+	for _, it := range a.Items {
+		b.Items = append(b.Items, job.BillItem{
+			Quantity: it.Quantity, Name: it.Name, Notes: it.Notes,
+			UnitPrice: it.UnitPrice, Amount: it.Amount,
+		})
+	}
+	for _, p := range a.Payments {
+		b.Payments = append(b.Payments, job.Payment{Method: p.Method, Amount: p.Amount})
+	}
+	return b
 }
 
 // Report records a job's outcome. A repeated report is a no-op on the server.

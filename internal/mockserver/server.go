@@ -196,6 +196,7 @@ func New(cfg Config) *Server {
 
 	s.mux.HandleFunc("POST /mock/pairing-codes", s.handleNewCode)
 	s.mux.HandleFunc("POST /mock/jobs", s.handleNewJobs)
+	s.mux.HandleFunc("POST /mock/bills", s.handleNewBill)
 	s.mux.HandleFunc("GET /mock/state", s.handleState)
 	s.mux.HandleFunc("PUT /mock/hostile", s.handleHostile)
 	s.mux.HandleFunc("POST /mock/devices/{id}/revoke", s.handleRevoke)
@@ -243,6 +244,26 @@ func (s *Server) NewJob(restaurant, printerID string, slip api.Slip) string {
 	id := fmt.Sprintf("job-%06d", s.seq)
 	s.jobs[id] = &serverJob{
 		Job:        api.Job{ID: id, PrinterID: printerID, CreatedAt: time.Now().UTC(), Slip: slip},
+		Restaurant: restaurant,
+		State:      queued,
+	}
+	s.jobOrder = append(s.jobOrder, id)
+	s.broadcastLocked()
+	return id
+}
+
+// NewBill queues a customer bill job for a restaurant's printer and wakes
+// waiting polls. A bill job is an api.Job whose Bill is set and whose Slip is
+// empty; the agent renders the bill instead of a kitchen ticket. Like NewJob
+// it is one job for one printer: the caller has already combined every
+// station's items into the bill and chosen the bill printer.
+func (s *Server) NewBill(restaurant, printerID string, bill api.Bill) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seq++
+	id := fmt.Sprintf("job-%06d", s.seq)
+	s.jobs[id] = &serverJob{
+		Job:        api.Job{ID: id, PrinterID: printerID, CreatedAt: time.Now().UTC(), Bill: &bill},
 		Restaurant: restaurant,
 		State:      queued,
 	}
@@ -366,6 +387,9 @@ func (s *Server) moveFromSilentTillsLocked(now time.Time) bool {
 		j.MovedFromTill = d.ID
 		j.Job.PrinterID = backup
 		j.Job.Slip.MovedFrom = names[from]
+		if j.Job.Bill != nil {
+			j.Job.Bill.MovedFrom = names[from]
+		}
 		s.alerts = append(s.alerts, fmt.Sprintf("%s: till %s not answering; moved from %s to %s on %s", id, d.ID, from, backup, bd.ID))
 	}
 	return changed
@@ -755,6 +779,26 @@ func (s *Server) handleNewJobs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ids": ids})
 }
 
+func (s *Server) handleNewBill(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RestaurantID string   `json:"restaurant_id"`
+		PrinterID    string   `json:"printer_id"`
+		Bill         api.Bill `json:"bill"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.RestaurantID == "" || req.PrinterID == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "restaurant_id and printer_id are required")
+		return
+	}
+	if req.Bill.PlacedAt.IsZero() {
+		req.Bill.PlacedAt = time.Now().UTC()
+	}
+	id := s.NewBill(req.RestaurantID, req.PrinterID, req.Bill)
+	writeJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
 func (s *Server) handleHostile(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Flags []string `json:"flags"`
@@ -867,6 +911,10 @@ type JobState struct {
 	MovedFrom  string              `json:"moved_from,omitempty"`
 	MovedTill  string              `json:"moved_from_till,omitempty"`
 	Late       *api.OutcomeRequest `json:"late_outcome,omitempty"`
+	// Bill is true when this job is a customer bill rather than a kitchen
+	// ticket. Total is the bill total in paise (for the page to show).
+	Bill  bool `json:"bill,omitempty"`
+	Total int  `json:"total,omitempty"`
 }
 
 func (s *Server) Snapshot() State {
@@ -885,13 +933,29 @@ func (s *Server) Snapshot() State {
 	sort.Slice(st.Devices, func(i, k int) bool { return st.Devices[i].ID < st.Devices[k].ID })
 	for _, id := range s.jobOrder {
 		j := s.jobs[id]
-		st.Jobs = append(st.Jobs, JobState{
+		js := JobState{
 			ID: id, Restaurant: j.Restaurant, PrinterID: j.Job.PrinterID, State: string(j.State),
-			Order: j.Job.Slip.OrderNumber, Station: j.Job.Slip.Station, Table: j.Job.Slip.Table,
-			Items: len(j.Job.Slip.Items), CreatedAt: j.Job.CreatedAt,
-			LeasedTo: j.LeasedTo, Deliveries: j.Deliveries, Reports: j.Reports, Outcome: j.Outcome,
-			RecordedBy: j.RecordedBy, MovedFrom: j.MovedFrom, MovedTill: j.MovedFromTill, Late: j.LateOutcome,
-		})
+			CreatedAt: j.Job.CreatedAt, LeasedTo: j.LeasedTo, Deliveries: j.Deliveries,
+			Reports: j.Reports, Outcome: j.Outcome, RecordedBy: j.RecordedBy,
+			MovedFrom: j.MovedFrom, MovedTill: j.MovedFromTill, Late: j.LateOutcome,
+		}
+		if j.Job.Bill != nil {
+			js.Bill = true
+			js.Station = "CUSTOMER BILL"
+			if j.Job.Bill.Title != "" {
+				js.Station = j.Job.Bill.Title
+			}
+			js.Order = j.Job.Bill.OrderNumber
+			js.Table = j.Job.Bill.Table
+			js.Items = len(j.Job.Bill.Items)
+			js.Total = j.Job.Bill.Total
+		} else {
+			js.Order = j.Job.Slip.OrderNumber
+			js.Station = j.Job.Slip.Station
+			js.Table = j.Job.Slip.Table
+			js.Items = len(j.Job.Slip.Items)
+		}
+		st.Jobs = append(st.Jobs, js)
 	}
 	for _, f := range Flags {
 		if s.hostile[f] {

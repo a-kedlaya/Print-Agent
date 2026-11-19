@@ -24,15 +24,22 @@ func (w Width) Valid() bool { return w == Width58 || w == Width80 }
 
 func (w Width) String() string { return fmt.Sprintf("%dmm", int(w)) }
 
-// Job is one station's ticket for one order, as fetched from a JobSource.
+// Job is one document for one printer, as fetched from a JobSource.
 //
-// A job names its printer by id only. It never carries a printer address and
-// never carries raw printer bytes: addresses live in the till's local config,
-// and bytes are made on the till by Render.
+// The server pre-splits an incoming order: each station's kitchen ticket is
+// one Job with its own printer_id, and the customer bill is a separate Job
+// also with its own printer_id. The agent receives them and prints each on
+// its named printer — it does no splitting of its own.
+//
+// A Job carries exactly one document: either a Slip (kitchen order ticket,
+// no prices) or a Bill (customer bill, with prices and totals). The queue
+// renders whichever is set. Both share the same crash-safety ledger and
+// failure ladder.
 type Job struct {
 	ID        string    // unique per job; the ledger key
 	PrinterID string    // id from the till's local config, never an address
-	Slip      Slip      // what to print
+	Slip      Slip      // set when this is a kitchen order ticket
+	Bill      *Bill     // set when this is a customer bill; nil otherwise
 	CreatedAt time.Time // when the order was confirmed (server clock)
 }
 
@@ -66,6 +73,55 @@ type Item struct {
 	Quantity int
 	Name     string // may be Kannada, Devanagari or Tamil
 	Notes    string // "less spicy"
+}
+
+// Bill is the customer-facing bill for one order: every station's items
+// combined, with prices and totals. A kitchen order ticket (Slip) carries no
+// prices by design; a Bill is where prices belong. Money is in paise
+// (minor units) throughout, so totals never drift through floating point.
+// TaxRate is in basis points (500 = 5.00%).
+type Bill struct {
+	Title         string // "CUSTOMER BILL"; Render defaults it when empty
+	Restaurant    string // printed header
+	BillNumber    string
+	Table         string // "T12"; empty for takeaway
+	OrderNumber   string
+	Server        string
+	Guests        int
+	PlacedAt      time.Time
+	Items         []BillItem
+	Subtotal      int // paise
+	TaxRate       int // basis points (500 = 5.00%)
+	Tax           int // paise
+	ServiceCharge int // paise
+	Discount      int // paise
+	Total         int // paise
+	Payments      []Payment
+	Change        int    // paise
+	Currency      string // amount prefix, e.g. "Rs "
+	Footer        string // e.g. a GSTIN line
+
+	// Banners, as on a Slip: decided by the wire track, drawn by Render.
+	Duplicate       bool   // every reprint is marked DUPLICATE
+	DuplicateReason string // e.g. "crash-recovery", "partial ticket on TANDOOR"
+	MovedFrom       string // printer the server moved this job from
+	FallbackFrom    string // printer on this till that was down, so this prints on its backup
+	Delayed         bool   // job older than the configured age
+}
+
+// BillItem is one line on the bill, with its price.
+type BillItem struct {
+	Quantity  int
+	Name      string // may be Kannada, Devanagari or Tamil
+	Notes     string
+	UnitPrice int // paise
+	Amount    int // paise (Quantity * UnitPrice)
+}
+
+// Payment is one tendered amount on the bill.
+type Payment struct {
+	Method string // "Cash", "Card"
+	Amount int    // paise
 }
 
 // Kind is the recorded end state of a job. Every job ends in exactly one.

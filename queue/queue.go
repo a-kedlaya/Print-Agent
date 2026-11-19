@@ -346,37 +346,68 @@ func (q *Queue) process(ctx context.Context, w *worker, t task) (job.Outcome, ne
 		}
 	}
 
-	slip := j.Slip
-	slip.PlacedAt = slip.PlacedAt.In(q.cfg.Location)
-	if !j.CreatedAt.IsZero() && q.cfg.Now().Sub(j.CreatedAt) > q.cfg.DelayedAfter {
-		slip.Delayed = true
-	}
+	// Banners are decided once and applied to whichever document this job
+	// carries: a kitchen ticket (Slip) or a customer bill (Bill). A bill is
+	// reprinted after a crash or moved to a backup for the same reasons a
+	// ticket is, and is marked the same way.
+	delayed := !j.CreatedAt.IsZero() && q.cfg.Now().Sub(j.CreatedAt) > q.cfg.DelayedAfter
 	if recovering {
 		// The agent died while writing this job. It may or may not be on
 		// paper, so it prints again, marked so the kitchen can tell.
-		slip.Duplicate = true
-		slip.DuplicateReason = CrashRecovery
 		notes = append(notes, CrashRecovery)
 		q.cfg.Log.Warn("job was mid-write when the agent stopped; printing again as DUPLICATE", "job", j.ID)
 	}
 	if retry != nil && retry.Partial {
 		// The failed attempt may have put part of this ticket on paper.
-		slip.Duplicate = true
-		slip.DuplicateReason = RetryAfterPartial
 		notes = append(notes, RetryAfterPartial)
 	}
 	if retry != nil {
 		notes = append(notes, "retried after an earlier failure")
 	}
-	if h != nil {
-		slip.FallbackFrom = h.from.Name
-		if h.partial {
-			slip.Duplicate = true
-			slip.DuplicateReason = "partial ticket on " + strings.ToUpper(h.from.Name)
-		}
-	}
 
-	data, err := render.Render(slip, w.p.Width)
+	var data []byte
+	var err error
+	if j.Bill != nil {
+		b := *j.Bill
+		b.PlacedAt = b.PlacedAt.In(q.cfg.Location)
+		b.Delayed = delayed
+		if recovering {
+			b.Duplicate = true
+			b.DuplicateReason = CrashRecovery
+		}
+		if retry != nil && retry.Partial {
+			b.Duplicate = true
+			b.DuplicateReason = RetryAfterPartial
+		}
+		if h != nil {
+			b.FallbackFrom = h.from.Name
+			if h.partial {
+				b.Duplicate = true
+				b.DuplicateReason = "partial ticket on " + strings.ToUpper(h.from.Name)
+			}
+		}
+		data, err = render.Bill(b, w.p.Width)
+	} else {
+		slip := j.Slip
+		slip.PlacedAt = slip.PlacedAt.In(q.cfg.Location)
+		slip.Delayed = delayed
+		if recovering {
+			slip.Duplicate = true
+			slip.DuplicateReason = CrashRecovery
+		}
+		if retry != nil && retry.Partial {
+			slip.Duplicate = true
+			slip.DuplicateReason = RetryAfterPartial
+		}
+		if h != nil {
+			slip.FallbackFrom = h.from.Name
+			if h.partial {
+				slip.Duplicate = true
+				slip.DuplicateReason = "partial ticket on " + strings.ToUpper(h.from.Name)
+			}
+		}
+		data, err = render.Render(slip, w.p.Width)
+	}
 	if err != nil {
 		q.cfg.Log.Error("render failed", "job", j.ID, "printer", w.p.ID, "err", err)
 		o := job.Outcome{Kind: job.Failed, Reason: err.Error()}

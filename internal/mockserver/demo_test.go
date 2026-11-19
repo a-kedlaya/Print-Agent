@@ -17,7 +17,7 @@ func TestDemoPageIsServed(t *testing.T) {
 	h := newHarness(t, Config{})
 	for _, path := range []string{"/", "/demo"} {
 		resp, body := h.do("GET", path, "", nil)
-		if resp.StatusCode != 200 || !strings.Contains(string(body), "live demo") ||
+		if resp.StatusCode != 200 || !strings.Contains(string(body), "monitor") ||
 			!strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
 			t.Fatalf("GET %s: %d %s", path, resp.StatusCode, resp.Header.Get("Content-Type"))
 		}
